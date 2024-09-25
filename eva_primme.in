@@ -1,17 +1,17 @@
 [Run name]
-name         qcd1_pb_L8T8_b6.0_c1.234_k0.13_r0_id4
+name         Snoopy137
 
 [Log and data directories]
-log_dir    ./log
-dat_dir    ./dat
+log_dir    ./log_dat
+dat_dir    ./log_dat
 
 [Configurations]
 type         e
-cnfg_dir     ../../../../cnfg_for_comparison/
+cnfg_dir     ./cnfg
 nio_nodes    12
 nio_streams  8
-first        1
-last         1 
+first        4
+last         4 
 step         1
 
 [Random number generator]
@@ -22,7 +22,6 @@ seed         49821
 kappa        0.07
 isw          0
 csw          1.234
-eoflg        1
 
 [Boundary conditions]
 type         3
@@ -51,14 +50,15 @@ ncy          5
 dm           0.00
 nkv          4
 nmx          64
+nmx_gcr      24
 res          1.0e-4
-
+res_gcr      0.1
 
 [Eigenvalues]
+
 operator     Qhat
 target       small
 nev          16
-ncv          40
 tolerance    1.e-10
 maxit        1000
 mpd          600

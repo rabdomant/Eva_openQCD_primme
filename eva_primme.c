@@ -1,13 +1,13 @@
 
 /*******************************************************************************
 *
-* File eva_primme_new.c
+* File eva_primme.c
 *
 * This software is distributed under the terms of the GNU General Public
 * License (GPL)
 *
 *
-* Syntax: eva_primme_new -i <input file>
+* Syntax: eva_primme -i <input file>
 *
 *
 *******************************************************************************/
@@ -35,6 +35,9 @@
 #include "forces.h"
 #include "version.h"
 #include "global.h"
+#if (defined _OPENMP)
+#include <omp.h>
+#endif
 
 #include "primme.h" /* header file is required to run primme */
 
@@ -66,9 +69,10 @@ typedef union {
     complex_dble r[12];
 } spin_dble_t;
 
-static int my_rank, endian;
+static int my_rank, endian, append;
 static int first, last, step;
 static int ifail0[2];
+static int ipgrd[3];
 
 static iodat_t iodat[1];
 static char nbase[NAME_SIZE], log_dir[NAME_SIZE];
@@ -81,7 +85,7 @@ static void read_dirs(void) {
         find_section("Run name");
         read_line("name", "%s", nbase);
 
-        find_section("Log directory");
+        find_section("Log and data directories");
         read_line("log_dir", "%s", log_dir);
     }
 
@@ -127,7 +131,7 @@ static void read_primme_parms(void) {
         read_line("nev", "%d", &nev);
         read_line("tolerance", "%lf", &tol);
 
-        error_root((nev < 1) || (tol < 0.0), 1, "read_primme_parms [eva_spec.c]", "Parameters are out of range");
+        error_root((nev < 1) || (tol < 0.0), 1, "read_primme_parms [eva_primme.c]", "Parameters are out of range");
 
         read_line("operator", "%s", name);
         read_line("target", "%s", targname);
@@ -135,7 +139,7 @@ static void read_primme_parms(void) {
         if (strcmp(name, "Qhat") == 0) {
             opid = EVA_QHAT;
         } else {
-            error_root(1, 1, "read_primme_parms [eva_spec.c]", "Unknown matrix type");
+            error_root(1, 1, "read_primme_parms [eva_primme.c]", "Unknown matrix type");
         }
 
         if (strcmp(targname, "small") == 0) {
@@ -143,7 +147,7 @@ static void read_primme_parms(void) {
         } else if (strcmp(targname, "large") == 0) {
             targ = primme_largest_abs;
         } else {
-            error_root(1, 1, "read_primme_parms [eva_spec.c]", "Unknown eigenvalue search target");
+            error_root(1, 1, "read_primme_parms [eva_primme.c]", "Unknown eigenvalue search target");
         }
     }
 
@@ -176,6 +180,8 @@ static void read_infile(int argc, char *argv[]) {
 
         fin = freopen(argv[ifile + 1], "r", stdin);
         error_root(fin == NULL, 1, "read_infile [eva_primme.c]", "Unable to open input file");
+
+        append = find_opt(argc, argv, "-a");
     }
 
     MPI_Bcast(&endian, 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -183,7 +189,6 @@ static void read_infile(int argc, char *argv[]) {
     read_dirs();
     read_iodat("Configurations", "i", iodat);
     read_cnfg_range();
-    read_lat_parms("Dirac operator", 0x2);
     read_bc_parms("Boundary conditions", 0x2);
 
     read_sap_parms("SAP", 0x1);
@@ -191,18 +196,106 @@ static void read_infile(int argc, char *argv[]) {
     read_dfl_parms("Deflation subspace");
     read_dfl_pro_parms("Deflation projection");
     read_dfl_gen_parms("Deflation subspace generation");
+    read_lat_parms("Lattice parameters", 0x2);
 
+    lat_parms();
+    set_sw_parms(lat_parms().m0[0]);
+
+    read_primme_parms();
     setup_files();
 
     if (my_rank == 0) { fclose(fin); }
 }
 
+static void check_old_log(int *fst, int *lst, int *stp) {
+    int ie, ic, isv;
+    int fc, lc, dc, pc;
+    int nt, np[4], bp[4];
+    char line[NAME_SIZE];
+
+    fend = fopen(log_file, "r");
+    error_root(fend == NULL, 1, "check_old_log [eva_primme.c]", "Unable to open log file");
+
+    fc = 0;
+    lc = 0;
+    dc = 0;
+    pc = 0;
+
+    ie = 0x0;
+    ic = 0;
+    isv = 0;
+
+    while (fgets(line, NAME_SIZE, fend) != NULL) {
+        if ((strstr(line, "MPI process grid") != NULL) && (strstr(line, "changed") == NULL)) {
+            if (sscanf(line, "%dx%dx%dx%d MPI process grid, %dx%dx%dx%d", np, np + 1, np + 2, np + 3, bp, bp + 1, bp + 2,
+                       bp + 3) == 8) {
+                ipgrd[0] = ((np[0] != NPROC0) || (np[1] != NPROC1) || (np[2] != NPROC2) || (np[3] != NPROC3));
+                ipgrd[1] = ((bp[0] != NPROC0_BLK) || (bp[1] != NPROC1_BLK) || (bp[2] != NPROC2_BLK) || (bp[3] != NPROC3_BLK));
+            } else {
+                ie |= 0x1;
+            }
+        } else if ((strstr(line, "OpenMP thread") != NULL) && (strstr(line, "changed") == NULL)) {
+            if (sscanf(line, "%d OpenMP thread", &nt) == 1) {
+                ipgrd[2] = (nt != NTHREAD);
+            } else {
+                ie |= 0x1;
+            }
+        } else if (strstr(line, "fully processed") != NULL) {
+            pc = lc;
+
+            if (sscanf(line, "Configuration no %d", &lc) == 1) {
+                ic += 1;
+                isv = 1;
+            } else {
+                ie |= 0x1;
+            }
+
+            if (ic == 1) {
+                fc = lc;
+            } else if (ic == 2) {
+                dc = lc - fc;
+            } else if ((ic > 2) && (lc != (pc + dc))) {
+                ie |= 0x2;
+            }
+        } else if (strstr(line, "Configuration no") != NULL) {
+            isv = 0;
+        }
+    }
+
+    fclose(fend);
+
+    error_root((ie & 0x1) != 0x0, 1, "check_old_log [eva_primme.c]", "Incorrect read count");
+    error_root((ie & 0x2) != 0x0, 1, "check_old_log [eva_primme.c]", "Configuration numbers are not equally spaced");
+    error_root(isv == 0, 1, "check_old_log [eva_primme.c]", "Log file extends beyond the last configuration save");
+
+    (*fst) = fc;
+    (*lst) = lc;
+    (*stp) = dc;
+}
+
 static void check_files(void) {
     int ie;
+    int fst, lst, stp;
+
+    ipgrd[0] = 0;
+    ipgrd[1] = 0;
+    ipgrd[2] = 0;
 
     if (my_rank == 0) {
-        ie = check_file(log_file, "r");
-        error_root(ie != 0, 1, "check_files [eva_primme.c]", "Attempt to overwrite old *.log file");
+        if (append) {
+            check_old_log(&fst, &lst, &stp);
+
+            error_root((fst != lst) && (stp != step), 1, "check_files [eva_primme.c]",
+                       "Continuation run:\n"
+                       "Previous run had a different configuration separation");
+            error_root(first != lst + step, 1, "check_files [eva_primme.c]",
+                       "Continuation run:\n"
+                       "Configuration range does not continue the previous one");
+        } else {
+            ie = check_file(log_file, "r");
+
+            error_root(ie != 0, 1, "check_files [eva_primme.c]", "Attempt to overwrite old *.log  file");
+        }
     }
 
     error(name_size("%sn%d", nbase, last) >= NAME_SIZE, 1, "check_files [eva_primme.c]", "Configuration base name is too long");
@@ -211,7 +304,6 @@ static void check_files(void) {
 }
 
 static void print_info(void) {
-    int isap, idfl;
     long ip;
 
     if (my_rank == 0) {
@@ -220,31 +312,37 @@ static void print_info(void) {
 
         if (ip == 0L) { remove("STARTUP_ERROR"); }
 
-        flog = freopen(log_file, "w", stdout);
-        error_root(flog == NULL, 1, "print_info [eva_primme.c]", "Unable to open log file");
-        printf("\n");
-
-        printf("Eigenvalue spectrum calculation of selected Dirac operator with Primme\n");
-        printf("----------------------------------------------------------------------\n\n");
-
-        printf("Program version %s\n", openQCD_RELEASE);
-
-        if (endian == LITTLE_ENDIAN) {
-            printf("The machine is little endian\n");
+        if (append) {
+            flog = freopen(log_file, "a", stdout);
         } else {
-            printf("The machine is big endian\n");
+            flog = freopen(log_file, "w", stdout);
         }
+        error_root(flog == NULL, 1, "print_info [eva_primme.c]", "Unable to open log file");
+        if (append) {
+            printf("Continuation run\n\n");
+        } else {
+            printf("\nEigenvalue spectrum calculation of selected Dirac operator with Primme\n");
+            printf("----------------------------------------------------------------------\n\n");
 
-        print_lattice_sizes();
-        print_lat_parms(0x2);
-        print_bc_parms(0x2);
+            printf("Program version %s\n", openQCD_RELEASE);
 
-        if (isap) { print_sap_parms(0x0); }
+            if (endian == LITTLE_ENDIAN) {
+                printf("The machine is little endian\n");
+            } else {
+                printf("The machine is big endian\n");
+            }
 
-        if (idfl) { print_dfl_parms(0x0); }
+            print_lattice_sizes();
+            print_lat_parms(0x2);
+            print_bc_parms(0x2);
 
-        print_iodat("i", iodat);
-        printf("Configurations no %d -> %d in steps of %d\n\n", first, last, step);
+            print_sap_parms(0x0);
+
+            print_dfl_parms(0x0);
+
+            print_iodat("i", iodat);
+            printf("Configurations no %d -> %d in steps of %d\n\n", first, last, step);
+        }
         fflush(flog);
     }
 }
@@ -259,10 +357,9 @@ static void dfl_wsize(int *nws, int *nwv, int *nwvd) {
 
     dp = dfl_parms();
     dpr = dfl_pro_parms();
-
-    maxn(nws, dp.Ns + 2);
-    maxn(nwv, 2 * dpr.nkv + 3);
-    maxn(nwvd, 4);
+    maxn(nws, dp.Ns + 2 * dpr.nkv + 14);
+    maxn(nwv, 2 * dpr.nmx_gcr + 3);
+    maxn(nwvd, 2 * dpr.nkv + 4);
 }
 
 static void wsize(int *nws, int *nwv, int *nwvd) {
@@ -319,7 +416,7 @@ int main(int argc, char *argv[]) {
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
 
     read_infile(argc, argv);
-    read_primme_parms();
+
     check_machine();
     geometry();
     check_files();
@@ -335,6 +432,9 @@ int main(int argc, char *argv[]) {
     pwsp = alloc_pauli_wsp();
 
     dfl = dfl_parms();
+#if (defined _OPENMP)
+    error(omp_get_num_threads() != 1, 1, "eva_primme.c", "At the present stage eva_primme works only with OMP_NUM_THREADS=1");
+#endif
     /*Set default values in PRIMME configuration struct */
 
     primme_initialize(&primme);
@@ -378,7 +478,7 @@ int main(int argc, char *argv[]) {
     primme.broadcastReal = broadcastForDouble;
 
     /* Display PRIMME configuration struct (optional) */
-    if (my_rank == 0) { primme_display_params(primme); }
+    if (my_rank == 0 && !append) { primme_display_params(primme); }
 
     /* Allocate space for converged Ritz values and residual norms */
     evals = (double *)malloc(primme.numEvals * sizeof(double));
@@ -395,10 +495,7 @@ int main(int argc, char *argv[]) {
         MPI_Barrier(MPI_COMM_WORLD);
         wt1 = MPI_Wtime();
 
-        if (my_rank == 0) {
-            printf("Configuration no %d\n", nc);
-            fflush(flog);
-        }
+        message("Configuration no %d\n", nc);
 
         sprintf(cnfg_file, "%sn%d", nbase, nc);
         read_flds(iodat, cnfg_file, 0x0, 0x1);
@@ -416,12 +513,7 @@ int main(int argc, char *argv[]) {
         /* Call primme  */
         ret = zprimme(evals, evecs, rnorms, &primme);
 
-        if (my_rank == 0) {
-            if (ret != 0) {
-                printf("Error: primme returned with nonzero exit status: %d \n", ret);
-                return -1;
-            }
-        }
+        error(ret != 0, 1, "eva_primme.c", "Error: primme returned with nonzero exit status: %d \n", ret);
 
         set_sd2zero(VOLUME_TRD / 2, 2, wscheck[0] + VOLUME / 2);
         set_sd2zero(VOLUME_TRD / 2, 2, wscheck[1] + VOLUME / 2);
@@ -444,47 +536,41 @@ int main(int argc, char *argv[]) {
 
             dlambda = spinor_prod5_dble(VOLUME / 2, i, wscheck[0], wscheck[0]);
 
-            if (my_rank == 0) {
-                printf("Eval[%d]: %-22.15E rnorm: %-22.15E oQCD check: %-22.15E dlambda.re: %-22.15E \n", i + 1, evals[i],
-                       rnorms[i], del, dlambda.re.q[0]);
-            }
+            message("Eval[%d]: %-22.15E rnorm: %-22.15E oQCD check: %-22.15E dlambda.re: %-22.15E \n", i + 1, evals[i],
+                    rnorms[i], del, dlambda.re.q[0]);
         }
 
-        if (my_rank == 0) {
-            printf(" %d eigenpairs converged\n", primme.initSize);
-            printf("Tolerance : %-22.15E\n", primme.aNorm * primme.eps);
-            printf("Iterations: %-" PRIMME_INT_P "\n", primme.stats.numOuterIterations);
-            printf("Restarts  : %-" PRIMME_INT_P "\n", primme.stats.numRestarts);
-            printf("Matvecs   : %-" PRIMME_INT_P "\n", primme.stats.numMatvecs);
-            printf("Preconds  : %-" PRIMME_INT_P "\n", primme.stats.numPreconds);
-            printf("Orthogonalization Time : %g\n", primme.stats.timeOrtho);
-            printf("Matvec Time            : %g\n", primme.stats.timeMatvec);
-            printf("GlobalSum Time         : %g\n", primme.stats.timeGlobalSum);
-            printf("Broadcast Time         : %g\n", primme.stats.timeBroadcast);
-            printf("Total Time             : %g\n", primme.stats.elapsedTime);
-            if (primme.stats.lockingIssue) {
-                printf("\nA locking problem has occurred.\n");
-                printf("Some eigenpairs do not have a residual norm less than the tolerance.\n");
-                printf("However, the subspace of evecs is accurate to the required tolerance.\n");
-            }
-
-            switch (primme.dynamicMethodSwitch) {
-            case -1:
-                printf("Recommended method for next run: DEFAULT_MIN_MATVECS\n");
-                break;
-            case -2:
-                printf("Recommended method for next run: DEFAULT_MIN_TIME\n");
-                break;
-            case -3:
-                printf("Recommended method for next run: DYNAMIC (close call)\n");
-                break;
-            }
+        message(" %d eigenpairs converged\n", primme.initSize);
+        message("Tolerance : %-22.15E\n", primme.aNorm * primme.eps);
+        message("Iterations: %-" PRIMME_INT_P "\n", primme.stats.numOuterIterations);
+        message("Restarts  : %-" PRIMME_INT_P "\n", primme.stats.numRestarts);
+        message("Matvecs   : %-" PRIMME_INT_P "\n", primme.stats.numMatvecs);
+        message("Preconds  : %-" PRIMME_INT_P "\n", primme.stats.numPreconds);
+        message("Orthogonalization Time : %g\n", primme.stats.timeOrtho);
+        message("Matvec Time            : %g\n", primme.stats.timeMatvec);
+        message("GlobalSum Time         : %g\n", primme.stats.timeGlobalSum);
+        message("Broadcast Time         : %g\n", primme.stats.timeBroadcast);
+        message("Total Time             : %g\n", primme.stats.elapsedTime);
+        if (primme.stats.lockingIssue) {
+            message("\nA locking problem has occurred.\n");
+            message("Some eigenpairs do not have a residual norm less than the tolerance.\n");
+            message("However, the subspace of evecs is accurate to the required tolerance.\n");
         }
 
-        if (my_rank == 0) {
-            printf("Configuration no %d fully processed in %.2e sec ", nc, wt2 - wt1);
-            printf("(average = %.2e sec)\n\n", wtavg / (double)((nc) / step + 1));
+        switch (primme.dynamicMethodSwitch) {
+        case -1:
+            message("Recommended method for next run: DEFAULT_MIN_MATVECS\n");
+            break;
+        case -2:
+            message("Recommended method for next run: DEFAULT_MIN_TIME\n");
+            break;
+        case -3:
+            message("Recommended method for next run: DYNAMIC (close call)\n");
+            break;
         }
+
+        message("Configuration no %d fully processed in %.2e sec ", nc, wt2 - wt1);
+        message("(average = %.2e sec)\n\n", wtavg / (double)((nc) / step + 1));
 
         check_endflag(&iend);
     }
