@@ -35,6 +35,7 @@
 #include "forces.h"
 #include "version.h"
 #include "global.h"
+#include "linalg.h"
 #if (defined _OPENMP)
 #include <omp.h>
 #endif
@@ -198,9 +199,6 @@ static void read_infile(int argc, char *argv[]) {
     read_dfl_gen_parms("Deflation subspace generation");
     read_lat_parms("Lattice parameters", 0x2);
 
-    lat_parms();
-    set_sw_parms(lat_parms().m0[0]);
-
     read_primme_parms();
     setup_files();
 
@@ -305,7 +303,7 @@ static void check_files(void) {
 
 static void print_info(void) {
     long ip;
-
+ 
     if (my_rank == 0) {
         ip = ftell(flog);
         fclose(flog);
@@ -388,8 +386,9 @@ static void check_endflag(int *iend) {
 }
 
 int main(int argc, char *argv[]) {
-    int nc, iend, *status, ret, i;
-    int nws, nwv, nwvd;
+    int nc, iend, *status, ret, i ,j;
+    int nws, nwv, nwvd, ik;
+    qflt qr;
 
     double wt1, wt2, wtavg;
     dfl_parms_t dfl;
@@ -398,7 +397,7 @@ int main(int argc, char *argv[]) {
     pauli_dble *m;
     qflt rqsm;
 
-    double del;
+    double del, w1, *w2;
 
     pauli_wsp_t *pwsp;
 
@@ -425,12 +424,12 @@ int main(int argc, char *argv[]) {
 
     wsize(&nws, &nwv, &nwvd);
     alloc_ws(nws);
-    wsd_uses_ws();
+    alloc_wsd(nws + 4 + evadat.nev);
     alloc_wv(nwv);
     alloc_wvd(nwvd);
     status = alloc_std_status();
     pwsp = alloc_pauli_wsp();
-
+    w2 = malloc(evadat.nev * sizeof(double));
     dfl = dfl_parms();
 #if (defined _OPENMP)
     error(omp_get_num_threads() != 1, 1, "eva_primme.c", "At the present stage eva_primme works only with OMP_NUM_THREADS=1");
@@ -483,17 +482,21 @@ int main(int argc, char *argv[]) {
     /* Allocate space for converged Ritz values and residual norms */
     evals = (double *)malloc(primme.numEvals * sizeof(double));
     evecs = (PRIMME_COMPLEX_DOUBLE *)malloc(primme.nLocal * primme.numEvals * sizeof(PRIMME_COMPLEX_DOUBLE));
+
     rnorms = (double *)malloc(primme.numEvals * sizeof(double));
 
-    wscheck = reserve_wsd(4);
+    if (lat_parms().nk > 1) {
+        wscheck = reserve_wsd(2 + primme.numEvals);
+        message("Reserving % d Ev\n", 2 + primme.numEvals);
+    } else {
+        wscheck = reserve_wsd(2);
+    }
+
     iend = 0;
     wtavg = 0.0;
 
     for (nc = first; (iend == 0) && (nc <= last); nc += step) {
         primme.initSize = 0;
-
-        MPI_Barrier(MPI_COMM_WORLD);
-        wt1 = MPI_Wtime();
 
         message("Configuration no %d\n", nc);
 
@@ -501,79 +504,113 @@ int main(int argc, char *argv[]) {
         read_flds(iodat, cnfg_file, 0x0, 0x1);
         set_ud_phase();
 
-        if (dfl.Ns) {
-            dfl_modes2(ifail0, status);
+        for (ik = 0; ik < lat_parms().nk; ik++) {
+            lat_parms();
+            set_sw_parms(lat_parms().m0[ik]);
 
-            if ((ifail0[0] < -2) || (ifail0[1] < 0)) {
-                print_status("dfl_modes2", ifail0, status);
-                error_root(1, 1, "main [eva_primme.c]", "Deflation subspace generation failed");
+            if (dfl.Ns) {
+                dfl_modes2(ifail0, status);
+
+                if ((ifail0[0] < -2) || (ifail0[1] < 0)) {
+                    print_status("dfl_modes2", ifail0, status);
+                    error_root(1, 1, "main [eva_primme.c]", "Deflation subspace generation failed");
+                }
+            }
+
+            MPI_Barrier(MPI_COMM_WORLD);
+            wt1 = MPI_Wtime();
+
+            /* Call primme  */
+            ret = zprimme(evals, evecs, rnorms, &primme);
+            wt2 = MPI_Wtime();
+
+            error(ret != 0, 1, "eva_primme.c", "Error: primme returned with nonzero exit status: %d \n", ret);
+
+            set_sd2zero(VOLUME_TRD / 2, 2, wscheck[0] + VOLUME / 2);
+            set_sd2zero(VOLUME_TRD / 2, 2, wscheck[1] + VOLUME / 2);
+
+            for (i = 0; i < primme.initSize; i++) {
+                memcpy((void *)wscheck[0], (void *)(evecs + i * primme.nLocal), sizeof(PRIMME_COMPLEX_DOUBLE) * primme.nLocal);
+
+                Dwhat_dble(0.0, wscheck[0], wscheck[1]);
+                mulg5_dble(VOLUME_TRD / 2, 0, wscheck[1]);
+                mulr_spinor_add_dble(VOLUME_TRD / 2, 0, wscheck[1], wscheck[0], -evals[i]);
+                rqsm = norm_square_dble(VOLUME_TRD / 2, 1, wscheck[1]);
+                del = sqrt(rqsm.q[0]);
+
+                m = swdfld();
+                sw_term(ODD_PTS);
+                Dwoe_dble(wscheck[0], wscheck[0]);
+                apply_swinv_dble(VOLUME / 2, 0.0, m, wscheck[0], pwsp, wscheck[0]);
+
+                dlambda = spinor_prod5_dble(VOLUME / 2, 1, wscheck[0], wscheck[0]);
+
+                message("Eval[%d]: %-22.15E rnorm: %-22.15E oQCD check: %-22.15E dlambda.re: %-22.15E \n", i + 1, evals[i],
+                        rnorms[i], del, dlambda.re.q[0]);
+            }
+
+            message(" %d eigenpairs converged\n", primme.initSize);
+            message("Tolerance : %-22.15E\n", primme.aNorm * primme.eps);
+            message("Iterations: %-" PRIMME_INT_P "\n", primme.stats.numOuterIterations);
+            message("Restarts  : %-" PRIMME_INT_P "\n", primme.stats.numRestarts);
+            message("Matvecs   : %-" PRIMME_INT_P "\n", primme.stats.numMatvecs);
+            message("Preconds  : %-" PRIMME_INT_P "\n", primme.stats.numPreconds);
+            message("Orthogonalization Time : %g\n", primme.stats.timeOrtho);
+            message("Matvec Time            : %g\n", primme.stats.timeMatvec);
+            message("GlobalSum Time         : %g\n", primme.stats.timeGlobalSum);
+            message("Broadcast Time         : %g\n", primme.stats.timeBroadcast);
+            message("Total Time             : %g\n", primme.stats.elapsedTime);
+            if (primme.stats.lockingIssue) {
+                message("\nA locking problem has occurred.\n");
+                message("Some eigenpairs do not have a residual norm less than the tolerance.\n");
+                message("However, the subspace of evecs is accurate to the required tolerance.\n");
+            }
+            message("Configuration no %d m[%d]=%lf fully processed in %.2e sec ", nc, ik, lat_parms().m0[ik], wt2 - wt1);
+            message("(average = %.2e sec)\n\n", wtavg / (double)((nc) / step + 1));
+
+            if (ik > 0) {
+                message("Projection matrix of Eigenvects\n");
+
+                for (i = 0; i < primme.initSize; i++) {
+                    memcpy((void *)wscheck[0], (void *)(evecs + i * primme.nLocal),
+                           sizeof(PRIMME_COMPLEX_DOUBLE) * primme.nLocal);
+                    qr = norm_square_dble(VOLUME_TRD / 2, 1, wscheck[0]);
+                    w1 = sqrt(qr.q[0]);
+
+                    message("|");
+                    for (j = 0; j < primme.initSize; j++) {
+                        qr = spinor_prod_re_dble(VOLUME_TRD / 2, 1, wscheck[0], wscheck[j + 2]);
+                        message(" %.2e ", (qr.q[0] / w1) / w2[j]);
+                    }
+                    message("|\n");
+                }
+            }
+
+            if (ik < lat_parms().nk - 1) {
+                for (i = 0; i < primme.initSize; i++) {
+                    memcpy((void *)wscheck[2 + i], (void *)(evecs + i * primme.nLocal),
+                           sizeof(PRIMME_COMPLEX_DOUBLE) * primme.nLocal);
+                    qr = norm_square_dble(VOLUME_TRD / 2, 1, wscheck[i + 2]);
+                    w2[i] = sqrt(qr.q[0]);
+                }
+            }
+
+            switch (primme.dynamicMethodSwitch) {
+            case -1:
+                message("Recommended method for next run: DEFAULT_MIN_MATVECS\n");
+                break;
+            case -2:
+                message("Recommended method for next run: DEFAULT_MIN_TIME\n");
+                break;
+            case -3:
+                message("Recommended method for next run: DYNAMIC (close call)\n");
+                break;
             }
         }
-
-        /* Call primme  */
-        ret = zprimme(evals, evecs, rnorms, &primme);
-
-        error(ret != 0, 1, "eva_primme.c", "Error: primme returned with nonzero exit status: %d \n", ret);
-
-        set_sd2zero(VOLUME_TRD / 2, 2, wscheck[0] + VOLUME / 2);
-        set_sd2zero(VOLUME_TRD / 2, 2, wscheck[1] + VOLUME / 2);
-        set_sd2zero(VOLUME_TRD / 2, 2, wscheck[2] + VOLUME / 2);
-        set_sd2zero(VOLUME_TRD / 2, 2, wscheck[3] + VOLUME / 2);
-
-        for (i = 0; i < primme.initSize; i++) {
-            memcpy((void *)wscheck[0], (void *)(evecs + i * primme.nLocal), sizeof(PRIMME_COMPLEX_DOUBLE) * primme.nLocal);
-
-            Dwhat_dble(0.0, wscheck[0], wscheck[1]);
-            mulg5_dble(VOLUME_TRD / 2, 2, wscheck[1]);
-            mulr_spinor_add_dble(VOLUME_TRD / 2, 2, wscheck[1], wscheck[0], -evals[i]);
-            rqsm = norm_square_dble(VOLUME / 2, i, wscheck[1]);
-            del = sqrt(rqsm.q[0]);
-
-            m = swdfld();
-            sw_term(ODD_PTS);
-            Dwoe_dble(wscheck[0], wscheck[0]);
-            apply_swinv_dble(VOLUME / 2, 0.0, m, wscheck[0], pwsp, wscheck[0]);
-
-            dlambda = spinor_prod5_dble(VOLUME / 2, i, wscheck[0], wscheck[0]);
-
-            message("Eval[%d]: %-22.15E rnorm: %-22.15E oQCD check: %-22.15E dlambda.re: %-22.15E \n", i + 1, evals[i],
-                    rnorms[i], del, dlambda.re.q[0]);
-        }
-
-        message(" %d eigenpairs converged\n", primme.initSize);
-        message("Tolerance : %-22.15E\n", primme.aNorm * primme.eps);
-        message("Iterations: %-" PRIMME_INT_P "\n", primme.stats.numOuterIterations);
-        message("Restarts  : %-" PRIMME_INT_P "\n", primme.stats.numRestarts);
-        message("Matvecs   : %-" PRIMME_INT_P "\n", primme.stats.numMatvecs);
-        message("Preconds  : %-" PRIMME_INT_P "\n", primme.stats.numPreconds);
-        message("Orthogonalization Time : %g\n", primme.stats.timeOrtho);
-        message("Matvec Time            : %g\n", primme.stats.timeMatvec);
-        message("GlobalSum Time         : %g\n", primme.stats.timeGlobalSum);
-        message("Broadcast Time         : %g\n", primme.stats.timeBroadcast);
-        message("Total Time             : %g\n", primme.stats.elapsedTime);
-        if (primme.stats.lockingIssue) {
-            message("\nA locking problem has occurred.\n");
-            message("Some eigenpairs do not have a residual norm less than the tolerance.\n");
-            message("However, the subspace of evecs is accurate to the required tolerance.\n");
-        }
-
-        switch (primme.dynamicMethodSwitch) {
-        case -1:
-            message("Recommended method for next run: DEFAULT_MIN_MATVECS\n");
-            break;
-        case -2:
-            message("Recommended method for next run: DEFAULT_MIN_TIME\n");
-            break;
-        case -3:
-            message("Recommended method for next run: DYNAMIC (close call)\n");
-            break;
-        }
-
-        message("Configuration no %d fully processed in %.2e sec ", nc, wt2 - wt1);
-        message("(average = %.2e sec)\n\n", wtavg / (double)((nc) / step + 1));
-
-        check_endflag(&iend);
     }
+    release_wsd();
+
+    check_endflag(&iend);
 
     if (my_rank == 0) {
         fflush(flog);

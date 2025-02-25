@@ -19,7 +19,7 @@ level        0
 seed         49821
 
 [Lattice parameters]
-kappa        0.07
+kappa        0.07 0.07
 isw          0
 csw          1.234
 
@@ -58,8 +58,7 @@ res_gcr      0.1
 
 operator     Qhat
 target       small
-nev          16
-tolerance    1.e-10
-maxit        1000
-mpd          600
+nev          4
+tolerance    1.e-14
+
 
