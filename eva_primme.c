@@ -1,4 +1,3 @@
-
 /*******************************************************************************
 *
 * File eva_primme.c
@@ -36,6 +35,8 @@
 #include "version.h"
 #include "global.h"
 #include "linalg.h"
+#define ABS(a) ((a) < 0 ? -(a) : (a))
+
 #if (defined _OPENMP)
 #include <omp.h>
 #endif
@@ -303,7 +304,7 @@ static void check_files(void) {
 
 static void print_info(void) {
     long ip;
- 
+
     if (my_rank == 0) {
         ip = ftell(flog);
         fclose(flog);
@@ -386,8 +387,8 @@ static void check_endflag(int *iend) {
 }
 
 int main(int argc, char *argv[]) {
-    int nc, iend, *status, ret, i ,j;
-    int nws, nwv, nwvd, ik;
+    int nc, iend, *status, ret, i, j;
+    int nws, nwv, nwvd;
     qflt qr;
 
     double wt1, wt2, wtavg;
@@ -400,7 +401,7 @@ int main(int argc, char *argv[]) {
     double del, w1, *w2;
 
     pauli_wsp_t *pwsp;
-
+    double m0; /*bare mass*/
     /* PRIMME configuration struct */
 
     double *evals; /* Array with the computed eigenvalues */
@@ -503,10 +504,11 @@ int main(int argc, char *argv[]) {
         sprintf(cnfg_file, "%sn%d", nbase, nc);
         read_flds(iodat, cnfg_file, 0x0, 0x1);
         set_ud_phase();
+        lat_parms();
+        m0 = lat_parms().m0[0];
 
-        for (ik = 0; ik < lat_parms().nk; ik++) {
-            lat_parms();
-            set_sw_parms(lat_parms().m0[ik]);
+        while (m0 >= lat_parms().m0[0] && m0 <= lat_parms().m0[1]) {
+            set_sw_parms(m0);
 
             if (dfl.Ns) {
                 dfl_modes2(ifail0, status);
@@ -565,10 +567,10 @@ int main(int argc, char *argv[]) {
                 message("Some eigenpairs do not have a residual norm less than the tolerance.\n");
                 message("However, the subspace of evecs is accurate to the required tolerance.\n");
             }
-            message("Configuration no %d m[%d]=%lf fully processed in %.2e sec ", nc, ik, lat_parms().m0[ik], wt2 - wt1);
+            message("Configuration no %d m0=%lf fully processed in %.2e sec ", nc, m0, wt2 - wt1);
             message("(average = %.2e sec)\n\n", wtavg / (double)((nc) / step + 1));
 
-            if (ik > 0) {
+            if (m0 != lat_parms().m0[0]) {
                 message("Projection matrix of Eigenvects\n");
 
                 for (i = 0; i < primme.initSize; i++) {
@@ -586,13 +588,11 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            if (ik < lat_parms().nk - 1) {
-                for (i = 0; i < primme.initSize; i++) {
-                    memcpy((void *)wscheck[2 + i], (void *)(evecs + i * primme.nLocal),
-                           sizeof(PRIMME_COMPLEX_DOUBLE) * primme.nLocal);
-                    qr = norm_square_dble(VOLUME_TRD / 2, 1, wscheck[i + 2]);
-                    w2[i] = sqrt(qr.q[0]);
-                }
+            for (i = 0; i < primme.initSize; i++) {
+                memcpy((void *)wscheck[2 + i], (void *)(evecs + i * primme.nLocal),
+                       sizeof(PRIMME_COMPLEX_DOUBLE) * primme.nLocal);
+                qr = norm_square_dble(VOLUME_TRD / 2, 1, wscheck[i + 2]);
+                w2[i] = sqrt(qr.q[0]);
             }
 
             switch (primme.dynamicMethodSwitch) {
@@ -606,16 +606,31 @@ int main(int argc, char *argv[]) {
                 message("Recommended method for next run: DYNAMIC (close call)\n");
                 break;
             }
+
+            /*determine the new m0 or stop:*/
+
+            if (m0 == lat_parms().m0[1]) { break; }
+
+            double mineval = ABS(evals[0]);
+            for (i = 1; i < primme.initSize; i++) {
+                if (mineval > ABS(evals[i])) { mineval = ABS(evals[i]); }
+            }
+            if (m0 + mineval > lat_parms().m0[1]) {
+                m0 = lat_parms().m0[1];
+            } else {
+                m0 = m0 + mineval;
+            }
+            message("Configuration no %d next step will evaluate m=%lf", nc, m0);
         }
-    }
-    release_wsd();
+        release_wsd();
 
-    check_endflag(&iend);
+        check_endflag(&iend);
 
-    if (my_rank == 0) {
-        fflush(flog);
-        copy_file(log_file, log_save);
-        fclose(flog);
+        if (my_rank == 0) {
+            fflush(flog);
+            copy_file(log_file, log_save);
+            fclose(flog);
+        }
     }
 
     MPI_Finalize();
