@@ -112,7 +112,7 @@ INCPATH = $(MPI_INCLUDE) ${openQCD}/include ${PRIMME_DIR}/include
 
 # additional libraries
 
-LIBS = m primme lapack blas
+LIBS = m primme scalapack flexiblas
 
 LIBPATH = $(MPI_LIB) $(PRIMME_DIR)/lib
 
