@@ -18,7 +18,7 @@ all: rmxeq mkdep mkxeq
 
 # main programs and modules to be compiled
 
-MAIN = eva_primme
+MAIN = eva_primme eva_primme_dphi
 
 ARCHIVE = archive iodat marchive sarchive
 

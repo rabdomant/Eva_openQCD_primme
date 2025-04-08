@@ -49,9 +49,9 @@
 #define N2 (NPROC2 * L2)
 #define N3 (NPROC3 * L3)
 
-void MatMult_Qhat_primme(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize, primme_params *primme, int *ierr);
-void MatMult_Qhat_primme_Preconditioner(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize,
-                                        primme_params *primme, int *ierr);
+void MatMult_Dw_primme(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize, primme_params *primme, int *ierr);
+void MatMult_Dw_primme_Preconditioner(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize,
+                                      primme_params *primme, int *ierr);
 
 static void par_GlobalSum(void *sendBuf, void *recvBuf, int *count, primme_params *primme, int *ierr);
 static void broadcastForDouble(void *buffer, int *count, primme_params *primme, int *ierr);
@@ -59,7 +59,8 @@ int mpierr;
 
 typedef enum
 {
-    EVA_QHAT
+    EVA_QHAT,
+    EVA_DW
 } evaop_t;
 
 typedef enum
@@ -159,6 +160,10 @@ static void read_primme_parms(void)
         if (strcmp(name, "Qhat") == 0)
         {
             opid = EVA_QHAT;
+        }
+        else if (strcmp(name, "Dw") == 0)
+        {
+            opid = EVA_DW;
         }
         else
         {
@@ -475,22 +480,21 @@ int main(int argc, char *argv[])
     int nc, iend, *status, ret, i, j;
     int nws, nwv, nwvd;
     qflt qr;
+    int nsites;
 
     double wt1, wt2, wtavg;
     spinor_dble **wscheck;
     complex_qflt dlambda;
-    pauli_dble *m;
     qflt rqsm;
 
     double del, w1, *w2;
 
-    pauli_wsp_t *pwsp;
     double m0; /*bare mass*/
     /* PRIMME configuration struct */
 
-    double *evals;                /* Array with the computed eigenvalues */
-    double *rnorms;               /* Array with the computed eigenpairs residual norms */
-    PRIMME_COMPLEX_DOUBLE *evecs; /* Array with the computed eigenvectors;
+    double *evals;                       /* Array with the computed eigenvalues */
+    double *rnorms;                      /* Array with the computed eigenpairs residual norms */
+    PRIMME_COMPLEX_DOUBLE *evecs = NULL; /* Array with the computed eigenvectors;
               first vector starts in evecs[0],
               second vector starts in evecs[primme.n],
               third vector starts in evecs[primme.n*2]...  */
@@ -509,11 +513,10 @@ int main(int argc, char *argv[])
 
     wsize(&nws, &nwv, &nwvd);
     alloc_ws(nws);
-    alloc_wsd(nws + 4 + evadat.nev);
+    alloc_wsd(nws + 8 + evadat.nev);
     alloc_wv(nwv);
     alloc_wvd(nwvd);
     status = alloc_std_status();
-    pwsp = alloc_pauli_wsp();
     w2 = malloc(evadat.nev * sizeof(double));
 
 #if (defined _OPENMP)
@@ -524,14 +527,24 @@ int main(int argc, char *argv[])
     primme_initialize(&primme);
 
     /* Set problem matrix */
-    primme.matrixMatvec = MatMult_Qhat_primme;
-    primme.applyPreconditioner = MatMult_Qhat_primme_Preconditioner;
+    if (evadat.opid == EVA_DW)
+    {
+        primme.matrixMatvec = MatMult_Dw_primme;
+        primme.applyPreconditioner = MatMult_Dw_primme_Preconditioner;
+        nsites = VOLUME;
+    }
+    else if (evadat.opid == EVA_QHAT)
+    {
+        primme.matrixMatvec = MatMult_Dw_primme;
+        primme.applyPreconditioner = MatMult_Dw_primme_Preconditioner;
+        nsites = VOLUME;
+    }
+
     /*Function that implements the matrix-vector product
      A*x for solving the problem A*x = l*x */
-
-    primme.n = 12 * N0 * N1 * N2 * N3 / 2; /* set problem dimension */
-    primme.numEvals = evadat.nev;          /* Number of wanted eigenpairs */
-    primme.eps = evadat.tol;               /* ||r|| <= eps * ||matrix|| */
+    primme.n = 12 * nsites * NPROC; /* set problem dimension */
+    primme.numEvals = evadat.nev;   /* Number of wanted eigenpairs */
+    primme.eps = evadat.tol;        /* ||r|| <= eps * ||matrix|| */
     primme.target = evadat.target;
 
     primme.numTargetShifts = 1;
@@ -542,11 +555,9 @@ int main(int argc, char *argv[])
         so set it to zero to avoid the already converged eigenvectors
         being used as initial vectors. */
 
-    /* Set method to solve the problem */
-    primme_set_method(PRIMME_DEFAULT_MIN_MATVECS, &primme);
     /* DYNAMIC uses a runtime heuristic to choose the fastest method between
-     PRIMME_DEFAULT_MIN_TIME and PRIMME_DEFAULT_MIN_MATVECS. But you can
-     set another method, such as PRIMME_LOBPCG_OrthoBasis_Window, directly */
+   PRIMME_DEFAULT_MIN_TIME and PRIMME_DEFAULT_MIN_MATVECS. But you can
+   set another method, such as PRIMME_LOBPCG_OrthoBasis_Window, directly */
     MPI_Comm comm = MPI_COMM_WORLD;
 
     MPI_Comm_size(MPI_COMM_WORLD, &primme.numProcs);
@@ -556,10 +567,11 @@ int main(int argc, char *argv[])
     /* In this example, the matrix is distributed by rows, and the first
      * processes may have an extra row in order to distribute the reing rows
      * n % numProcs */
-    PRIMME_INT nLocal = primme.n / primme.numProcs + (primme.n % primme.numProcs > primme.procID ? 1 : 0);
-    primme.nLocal = nLocal; /* Number of local rows */
+    primme.nLocal = primme.n / primme.numProcs; /* Number of local rows */
     primme.globalSumReal = par_GlobalSum;
     primme.broadcastReal = broadcastForDouble;
+    /* Set method to solve the problem */
+    primme_set_method(PRIMME_DEFAULT_MIN_MATVECS, &primme);
 
     /* Display PRIMME configuration struct (optional) */
     if (my_rank == 0 && !append)
@@ -569,19 +581,13 @@ int main(int argc, char *argv[])
 
     /* Allocate space for converged Ritz values and residual norms */
     evals = (double *)malloc(primme.numEvals * sizeof(double));
-    evecs = (PRIMME_COMPLEX_DOUBLE *)malloc(primme.nLocal * primme.numEvals * sizeof(PRIMME_COMPLEX_DOUBLE));
+    evecs = (PRIMME_COMPLEX_DOUBLE *)malloc(primme.n * primme.numEvals * sizeof(PRIMME_COMPLEX_DOUBLE));
+    error(evecs == NULL, 1, "eva_primme.c", "Error: Unable to allocate the primme eigenvectors \n");
 
     rnorms = (double *)malloc(primme.numEvals * sizeof(double));
 
-    if (lat_parms().nk > 1)
-    {
-        wscheck = reserve_wsd(2 + primme.numEvals);
-        message("Reserving % d Ev\n", 2 + primme.numEvals);
-    }
-    else
-    {
-        wscheck = reserve_wsd(2);
-    }
+    wscheck = reserve_wsd(2 + primme.numEvals);
+    message("Reserving % d Ev\n", 2 + primme.numEvals);
 
     iend = 0;
     wtavg = 0.0;
@@ -597,19 +603,16 @@ int main(int argc, char *argv[])
         set_ud_phase();
         lat_parms();
         m0 = lat_parms().m0[0];
-        set_sw_parms(m0);
-
-        dfl_modes2(ifail, status);
 
         while (m0 >= lat_parms().m0[0] && m0 <= lat_parms().m0[1])
         {
             set_sw_parms(m0);
-            /*set_tm_parms(1);*/
 
             is = query_flags(UD_PHASE_SET);
             if (is == 0)
                 set_ud_phase();
 
+            dfl_modes2(ifail, status);
 
             if ((ifail[0] < -2) || (ifail[1] < 0))
             {
@@ -621,35 +624,34 @@ int main(int argc, char *argv[])
             if (is == 0)
                 unset_ud_phase();
 
+            sw_term(NO_PTS);
+
             MPI_Barrier(MPI_COMM_WORLD);
+
+            message("Evaluating configuration no %d with m=%lf\n", nc, m0);
+
             wt1 = MPI_Wtime();
 
             /* Call primme  */
+            primme.initSize = 0;
+
             ret = zprimme(evals, evecs, rnorms, &primme);
             wt2 = MPI_Wtime();
 
             error(ret != 0, 1, "eva_primme.c", "Error: primme returned with nonzero exit status: %d \n", ret);
 
-            set_sd2zero(VOLUME / 2, 2, wscheck[0] + VOLUME / 2);
-            set_sd2zero(VOLUME / 2, 2, wscheck[1] + VOLUME / 2);
 
             for (i = 0; i < primme.initSize; i++)
             {
                 memcpy((void *)wscheck[0], (void *)(evecs + i * primme.nLocal), sizeof(PRIMME_COMPLEX_DOUBLE) * primme.nLocal);
 
-                Dwhat_dble(0.0, wscheck[0], wscheck[1]);
-                mulg5_dble(VOLUME / 2, 0, wscheck[1]);
-                mulr_spinor_add_dble(VOLUME / 2, 0, wscheck[1], wscheck[0], -evals[i]);
-                rqsm = norm_square_dble(VOLUME / 2, 1, wscheck[1]);
+                Dw_dble(0.0, wscheck[0], wscheck[1]);
+                mulg5_dble(nsites, 0, wscheck[1]);
+                mulr_spinor_add_dble(nsites, 0, wscheck[1], wscheck[0], -evals[i]);
+                rqsm = norm_square_dble(nsites, 1, wscheck[1]);
                 del = sqrt(rqsm.q[0]);
 
-                m = swdfld();
-                sw_term(ODD_PTS);
-                Dwoe_dble(wscheck[0], wscheck[0]);
-                apply_swinv_dble(VOLUME / 2, 0.0, m, wscheck[0], pwsp, wscheck[0]);
-
-                dlambda = spinor_prod5_dble(VOLUME / 2, 1, wscheck[0], wscheck[0]);
-
+                dlambda = spinor_prod5_dble(nsites, 1, wscheck[0], wscheck[0]);
                 message("Eval[%d]: %-22.15E rnorm: %-22.15E oQCD check: %-22.15E dlambda.re: %-22.15E \n", i + 1, evals[i],
                         rnorms[i], del, dlambda.re.q[0]);
             }
@@ -682,14 +684,14 @@ int main(int argc, char *argv[])
                 {
                     memcpy((void *)wscheck[0], (void *)(evecs + i * primme.nLocal),
                            sizeof(PRIMME_COMPLEX_DOUBLE) * primme.nLocal);
-                    mulg5_dble(VOLUME / 2, 0, wscheck[0]);
-                    qr = norm_square_dble(VOLUME_TRD / 2, 1, wscheck[0]);
+                    mulg5_dble(nsites, 0, wscheck[0]);
+                    qr = norm_square_dble(nsites, 1, wscheck[0]);
                     w1 = sqrt(qr.q[0]);
 
                     message("|");
                     for (j = 0; j < primme.initSize; j++)
                     {
-                        qr = spinor_prod_re_dble(VOLUME_TRD / 2, 1, wscheck[0], wscheck[j + 2]);
+                        qr = spinor_prod_re_dble(nsites, 1, wscheck[0], wscheck[j + 2]);
                         message(" %.2e ", (qr.q[0] / w1) / w2[j]);
                     }
                     message("|\n");
@@ -700,8 +702,8 @@ int main(int argc, char *argv[])
             {
                 memcpy((void *)wscheck[2 + i], (void *)(evecs + i * primme.nLocal),
                        sizeof(PRIMME_COMPLEX_DOUBLE) * primme.nLocal);
-                mulg5_dble(VOLUME / 2, 0, wscheck[i + 2]);
-                qr = norm_square_dble(VOLUME_TRD / 2, 1, wscheck[i + 2]);
+                mulg5_dble(nsites, 0, wscheck[i + 2]);
+                qr = norm_square_dble(nsites, 1, wscheck[i + 2]);
                 w2[i] = sqrt(qr.q[0]);
             }
 
@@ -722,7 +724,7 @@ int main(int argc, char *argv[])
 
             if (m0 == lat_parms().m0[1])
             {
-                message("End of iteration\n");
+                message("End of iteration for configuration no %d\n", nc);
 
                 break;
             }
@@ -735,7 +737,7 @@ int main(int argc, char *argv[])
                     mineval = ABS(evals[i]);
                 }
             }
-            mineval /= 400.;
+
             if (m0 + mineval > lat_parms().m0[1])
             {
                 m0 = lat_parms().m0[1];
@@ -745,7 +747,6 @@ int main(int argc, char *argv[])
                 m0 = m0 + mineval;
             }
             message("Configuration no %d next step will evaluate m=%lf\n", nc, m0);
-            fflush(stdout);
         }
         release_wsd();
 
@@ -763,28 +764,21 @@ int main(int argc, char *argv[])
     exit(0);
 }
 
-void MatMult_Qhat_primme(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize, primme_params *primme, int *ierr)
+void MatMult_Dw_primme(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize, primme_params *primme, int *ierr)
 {
     spinor_dble **wsd3;
 
-    int blk;                     /* nx */
-    PRIMME_COMPLEX_DOUBLE *xvec; /* pointer to i-th input vector x */
-    PRIMME_COMPLEX_DOUBLE *yvec; /* pointer to i-th output vector y */
-    sw_term(ODD_PTS);
+    sw_term(NO_PTS);
 
     wsd3 = reserve_wsd(2);
-    for (blk = 0; blk < *blockSize; blk++)
-    {
-        xvec = (PRIMME_COMPLEX_DOUBLE *)x + *ldx * blk; /* pointer to i-th input vector x */
-        yvec = (PRIMME_COMPLEX_DOUBLE *)y + *ldy * blk; /* pointer to i-th output vector y */
 
-        memcpy((void *)wsd3[0], (void *)xvec, sizeof(PRIMME_COMPLEX_DOUBLE) * *ldx);
+    memcpy((void *)wsd3[0], (void *)x, sizeof(PRIMME_COMPLEX_DOUBLE) * *ldx);
 
-        Dwhat_dble(0.0, wsd3[0], wsd3[1]);
-        mulg5_dble(VOLUME_TRD / 2, 2, wsd3[1]);
+    Dw_dble(0.0, wsd3[0], wsd3[1]);
 
-        memcpy((void *)yvec, (void *)wsd3[1], sizeof(PRIMME_COMPLEX_DOUBLE) * *ldx);
-    }
+    mulg5_dble(VOLUME, 2, (spinor_dble *)wsd3[1]);
+    memcpy((void *)y, (void *)wsd3[1], sizeof(PRIMME_COMPLEX_DOUBLE) * *ldx);
+
     release_wsd();
 }
 
@@ -816,35 +810,28 @@ static void broadcastForDouble(void *buffer, int *count, primme_params *primme, 
     }
 }
 
-void MatMult_Qhat_primme_Preconditioner(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize,
-                                        primme_params *primme, int *ierr)
+void MatMult_Dw_primme_Preconditioner(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize,
+                                      primme_params *primme, int *ierr)
 {
     spinor_dble **wsd3;
     int status;
     int ifail;
+    sap_parms_t sap;
 
-    int blk;                     /* nx */
-    PRIMME_COMPLEX_DOUBLE *xvec; /* pointer to i-th input vector x */
-    PRIMME_COMPLEX_DOUBLE *yvec; /* pointer to i-th output vector y */
     lat_parms_t lat = lat_parms();
     dfl_pro_parms_t dfp = dfl_pro_parms();
     dfl_gen_parms_t dfg = dfl_gen_parms();
 
+    sap = sap_parms();
+    set_sap_parms(sap.bs, 1, 4, 5);
     wsd3 = reserve_wsd(1);
-    for (blk = 0; blk < *blockSize; blk++)
-    {
-        xvec = (PRIMME_COMPLEX_DOUBLE *)x + *ldx * blk; /* pointer to i-th input vector x */
-        yvec = (PRIMME_COMPLEX_DOUBLE *)y + *ldy * blk; /* pointer to i-th output vector y */
 
-        set_sd2zero(VOLUME_TRD / 2, 2, wsd3[0] + VOLUME / 2);
-        memcpy((void *)wsd3[0], (void *)xvec, sizeof(PRIMME_COMPLEX_DOUBLE) * *ldx);
+    memcpy((void *)wsd3[0], (void *)x, sizeof(PRIMME_COMPLEX_DOUBLE) * *ldx);
+    mulg5_dble(VOLUME, 2, wsd3[0]);
 
-        mulg5_dble(VOLUME_TRD / 2, 2, wsd3[0]);
+    dfl_sap_gcr2(dfp.nkv, dfp.nmx, lat.isw, dfp.res, dfg.mu, wsd3[0], wsd3[0], &ifail, &status);
 
-        dfl_sap_gcr2(dfp.nkv, dfp.nmx, lat.isw, dfp.res, dfg.mu, wsd3[0], wsd3[0], &ifail, &status);
-
-        memcpy((void *)yvec, (void *)wsd3[0], sizeof(PRIMME_COMPLEX_DOUBLE) * *ldx);
-    }
+    memcpy((void *)y, (void *)wsd3[0], sizeof(PRIMME_COMPLEX_DOUBLE) * *ldx);
 
     release_wsd();
 }
