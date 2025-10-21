@@ -50,35 +50,24 @@
 #define N3 (NPROC3 * L3)
 
 void MatMult_Dw_primme(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize, primme_params *primme, int *ierr);
-void MatMult_Dw_primme_Preconditioner(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize,
-                                      primme_params *primme, int *ierr);
+void MatMult_Dw_primme_Preconditioner(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize, primme_params *primme,
+                                      int *ierr);
 
 static void par_GlobalSum(void *sendBuf, void *recvBuf, int *count, primme_params *primme, int *ierr);
 static void broadcastForDouble(void *buffer, int *count, primme_params *primme, int *ierr);
 int mpierr;
 
-typedef enum
-{
-    EVA_QHAT,
-    EVA_DW
-} evaop_t;
+typedef enum { EVA_QHAT, EVA_DW } evaop_t;
 
-typedef enum
-{
-    EVA_SMALL,
-    EVA_LARGE,
-    EVA_ALL
-} evatarget_t;
+typedef enum { EVA_SMALL, EVA_LARGE, EVA_ALL } evatarget_t;
 
-static struct
-{
+static struct {
     int nev, target, opid;
     double tol;
     char opname[16];
 } evadat;
 
-typedef union
-{
+typedef union {
     spinor_dble s;
     complex_dble r[12];
 } spin_dble_t;
@@ -94,10 +83,8 @@ static char log_file[NAME_SIZE], log_save[NAME_SIZE];
 static char cnfg_file[NAME_SIZE], end_file[NAME_SIZE];
 static FILE *fin = NULL, *flog = NULL, *fend = NULL;
 
-static void read_dirs(void)
-{
-    if (my_rank == 0)
-    {
+static void read_dirs(void) {
+    if (my_rank == 0) {
         find_section("Run name");
         read_line("name", "%s", nbase);
 
@@ -109,8 +96,7 @@ static void read_dirs(void)
     MPI_Bcast(log_dir, NAME_SIZE, MPI_CHAR, 0, MPI_COMM_WORLD);
 }
 
-static void setup_files(void)
-{
+static void setup_files(void) {
     error(name_size("%s/%s.eva_primme.log~", log_dir, nbase) >= NAME_SIZE, 1, "setup_files [eva_primme.c]",
           "log_dir name is too long");
 
@@ -121,10 +107,8 @@ static void setup_files(void)
     check_dir_root(log_dir);
 }
 
-static void read_cnfg_range(void)
-{
-    if (my_rank == 0)
-    {
+static void read_cnfg_range(void) {
+    if (my_rank == 0) {
         find_section("Configurations");
 
         read_line("first", "%d", &first);
@@ -140,14 +124,12 @@ static void read_cnfg_range(void)
     MPI_Bcast(&step, 1, MPI_INT, 0, MPI_COMM_WORLD);
 }
 
-static void read_primme_parms(void)
-{
+static void read_primme_parms(void) {
     int opid, nev, targ;
     double tol;
     char name[NAME_SIZE], targname[NAME_SIZE];
 
-    if (my_rank == 0)
-    {
+    if (my_rank == 0) {
         find_section("Eigenvalues");
         read_line("nev", "%d", &nev);
         read_line("tolerance", "%lf", &tol);
@@ -157,29 +139,19 @@ static void read_primme_parms(void)
         read_line("operator", "%s", name);
         read_line("target", "%s", targname);
 
-        if (strcmp(name, "Qhat") == 0)
-        {
+        if (strcmp(name, "Qhat") == 0) {
             opid = EVA_QHAT;
-        }
-        else if (strcmp(name, "Dw") == 0)
-        {
+        } else if (strcmp(name, "Dw") == 0) {
             opid = EVA_DW;
-        }
-        else
-        {
+        } else {
             error_root(1, 1, "read_primme_parms [eva_primme.c]", "Unknown matrix type");
         }
 
-        if (strcmp(targname, "small") == 0)
-        {
+        if (strcmp(targname, "small") == 0) {
             targ = primme_closest_abs;
-        }
-        else if (strcmp(targname, "large") == 0)
-        {
+        } else if (strcmp(targname, "large") == 0) {
             targ = primme_largest_abs;
-        }
-        else
-        {
+        } else {
             error_root(1, 1, "read_primme_parms [eva_primme.c]", "Unknown eigenvalue search target");
         }
     }
@@ -197,12 +169,10 @@ static void read_primme_parms(void)
     strcpy(evadat.opname, name);
 }
 
-static void read_infile(int argc, char *argv[])
-{
+static void read_infile(int argc, char *argv[]) {
     int ifile;
 
-    if (my_rank == 0)
-    {
+    if (my_rank == 0) {
         flog = freopen("STARTUP_ERROR", "w", stdout);
 
         ifile = find_opt(argc, argv, "-i");
@@ -236,14 +206,10 @@ static void read_infile(int argc, char *argv[])
     read_primme_parms();
     setup_files();
 
-    if (my_rank == 0)
-    {
-        fclose(fin);
-    }
+    if (my_rank == 0) { fclose(fin); }
 }
 
-static void check_old_log(int *fst, int *lst, int *stp)
-{
+static void check_old_log(int *fst, int *lst, int *stp) {
     int ie, ic, isv;
     int fc, lc, dc, pc;
     int nt, np[4], bp[4];
@@ -261,61 +227,39 @@ static void check_old_log(int *fst, int *lst, int *stp)
     ic = 0;
     isv = 0;
 
-    while (fgets(line, NAME_SIZE, fend) != NULL)
-    {
-        if ((strstr(line, "MPI process grid") != NULL) && (strstr(line, "changed") == NULL))
-        {
+    while (fgets(line, NAME_SIZE, fend) != NULL) {
+        if ((strstr(line, "MPI process grid") != NULL) && (strstr(line, "changed") == NULL)) {
             if (sscanf(line, "%dx%dx%dx%d MPI process grid, %dx%dx%dx%d", np, np + 1, np + 2, np + 3, bp, bp + 1, bp + 2,
-                       bp + 3) == 8)
-            {
+                       bp + 3) == 8) {
                 ipgrd[0] = ((np[0] != NPROC0) || (np[1] != NPROC1) || (np[2] != NPROC2) || (np[3] != NPROC3));
                 ipgrd[1] = ((bp[0] != NPROC0_BLK) || (bp[1] != NPROC1_BLK) || (bp[2] != NPROC2_BLK) || (bp[3] != NPROC3_BLK));
-            }
-            else
-            {
+            } else {
                 ie |= 0x1;
             }
-        }
-        else if ((strstr(line, "OpenMP thread") != NULL) && (strstr(line, "changed") == NULL))
-        {
-            if (sscanf(line, "%d OpenMP thread", &nt) == 1)
-            {
+        } else if ((strstr(line, "OpenMP thread") != NULL) && (strstr(line, "changed") == NULL)) {
+            if (sscanf(line, "%d OpenMP thread", &nt) == 1) {
                 ipgrd[2] = (nt != NTHREAD);
-            }
-            else
-            {
+            } else {
                 ie |= 0x1;
             }
-        }
-        else if (strstr(line, "fully processed") != NULL)
-        {
+        } else if (strstr(line, "fully processed") != NULL) {
             pc = lc;
 
-            if (sscanf(line, "Configuration no %d", &lc) == 1)
-            {
+            if (sscanf(line, "Configuration no %d", &lc) == 1) {
                 ic += 1;
                 isv = 1;
-            }
-            else
-            {
+            } else {
                 ie |= 0x1;
             }
 
-            if (ic == 1)
-            {
+            if (ic == 1) {
                 fc = lc;
-            }
-            else if (ic == 2)
-            {
+            } else if (ic == 2) {
                 dc = lc - fc;
-            }
-            else if ((ic > 2) && (lc != (pc + dc)))
-            {
+            } else if ((ic > 2) && (lc != (pc + dc))) {
                 ie |= 0x2;
             }
-        }
-        else if (strstr(line, "Configuration no") != NULL)
-        {
+        } else if (strstr(line, "Configuration no") != NULL) {
             isv = 0;
         }
     }
@@ -331,8 +275,7 @@ static void check_old_log(int *fst, int *lst, int *stp)
     (*stp) = dc;
 }
 
-static void check_files(void)
-{
+static void check_files(void) {
     int ie;
     int fst, lst, stp;
 
@@ -340,10 +283,8 @@ static void check_files(void)
     ipgrd[1] = 0;
     ipgrd[2] = 0;
 
-    if (my_rank == 0)
-    {
-        if (append)
-        {
+    if (my_rank == 0) {
+        if (append) {
             check_old_log(&fst, &lst, &stp);
 
             error_root((fst != lst) && (stp != step), 1, "check_files [eva_primme.c]",
@@ -352,9 +293,7 @@ static void check_files(void)
             error_root(first != lst + step, 1, "check_files [eva_primme.c]",
                        "Continuation run:\n"
                        "Configuration range does not continue the previous one");
-        }
-        else
-        {
+        } else {
             ie = check_file(log_file, "r");
 
             error_root(ie != 0, 1, "check_files [eva_primme.c]", "Attempt to overwrite old *.log  file");
@@ -366,46 +305,32 @@ static void check_files(void)
     check_iodat(iodat, "i", 0x1, cnfg_file);
 }
 
-static void print_info(void)
-{
+static void print_info(void) {
     long ip;
 
-    if (my_rank == 0)
-    {
+    if (my_rank == 0) {
         ip = ftell(flog);
         fclose(flog);
 
-        if (ip == 0L)
-        {
-            remove("STARTUP_ERROR");
-        }
+        if (ip == 0L) { remove("STARTUP_ERROR"); }
 
-        if (append)
-        {
+        if (append) {
             flog = freopen(log_file, "a", stdout);
-        }
-        else
-        {
+        } else {
             flog = freopen(log_file, "w", stdout);
         }
         error_root(flog == NULL, 1, "print_info [eva_primme.c]", "Unable to open log file");
-        if (append)
-        {
+        if (append) {
             printf("Continuation run\n\n");
-        }
-        else
-        {
+        } else {
             printf("\nEigenvalue spectrum calculation of selected Dirac operator with Primme\n");
             printf("----------------------------------------------------------------------\n\n");
 
             printf("Program version %s\n", openQCD_RELEASE);
 
-            if (endian == LITTLE_ENDIAN)
-            {
+            if (endian == LITTLE_ENDIAN) {
                 printf("The machine is little endian\n");
-            }
-            else
-            {
+            } else {
                 printf("The machine is big endian\n");
             }
 
@@ -424,16 +349,11 @@ static void print_info(void)
     }
 }
 
-static void maxn(int *n, int m)
-{
-    if ((*n) < m)
-    {
-        (*n) = m;
-    }
+static void maxn(int *n, int m) {
+    if ((*n) < m) { (*n) = m; }
 }
 
-static void dfl_wsize(int *nws, int *nwv, int *nwvd)
-{
+static void dfl_wsize(int *nws, int *nwv, int *nwvd) {
     dfl_parms_t dp;
     dfl_pro_parms_t dpr;
 
@@ -444,8 +364,7 @@ static void dfl_wsize(int *nws, int *nwv, int *nwvd)
     maxn(nwvd, 2 * dpr.nkv + 4);
 }
 
-static void wsize(int *nws, int *nwv, int *nwvd)
-{
+static void wsize(int *nws, int *nwv, int *nwvd) {
     (*nws) = 0;
     (*nwv) = 0;
     (*nwvd) = 0;
@@ -453,21 +372,16 @@ static void wsize(int *nws, int *nwv, int *nwvd)
     dfl_wsize(nws, nwv, nwvd);
 }
 
-static void check_endflag(int *iend)
-{
-    if (my_rank == 0)
-    {
+static void check_endflag(int *iend) {
+    if (my_rank == 0) {
         fend = fopen(end_file, "r");
 
-        if (fend != NULL)
-        {
+        if (fend != NULL) {
             fclose(fend);
             remove(end_file);
             (*iend) = 1;
             printf("End flag set, run stopped\n\n");
-        }
-        else
-        {
+        } else {
             (*iend) = 0;
         }
     }
@@ -475,8 +389,7 @@ static void check_endflag(int *iend)
     MPI_Bcast(iend, 1, MPI_INT, 0, MPI_COMM_WORLD);
 }
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     int nc, iend, *status, ret, i, j;
     int nws, nwv, nwvd;
     qflt qr;
@@ -487,13 +400,13 @@ int main(int argc, char *argv[])
     complex_qflt dlambda;
     qflt rqsm;
 
-    double del, w1, *w2;
+    double del, w1, *w2,starteval;
 
     double m0; /*bare mass*/
     /* PRIMME configuration struct */
 
-    double *evals;                       /* Array with the computed eigenvalues */
-    double *rnorms;                      /* Array with the computed eigenpairs residual norms */
+    double *evals; /* Array with the computed eigenvalues */
+    double *rnorms; /* Array with the computed eigenpairs residual norms */
     PRIMME_COMPLEX_DOUBLE *evecs = NULL; /* Array with the computed eigenvectors;
               first vector starts in evecs[0],
               second vector starts in evecs[primme.n],
@@ -527,14 +440,11 @@ int main(int argc, char *argv[])
     primme_initialize(&primme);
 
     /* Set problem matrix */
-    if (evadat.opid == EVA_DW)
-    {
+    if (evadat.opid == EVA_DW) {
         primme.matrixMatvec = MatMult_Dw_primme;
         primme.applyPreconditioner = MatMult_Dw_primme_Preconditioner;
         nsites = VOLUME;
-    }
-    else if (evadat.opid == EVA_QHAT)
-    {
+    } else if (evadat.opid == EVA_QHAT) {
         primme.matrixMatvec = MatMult_Dw_primme;
         primme.applyPreconditioner = MatMult_Dw_primme_Preconditioner;
         nsites = VOLUME;
@@ -543,8 +453,8 @@ int main(int argc, char *argv[])
     /*Function that implements the matrix-vector product
      A*x for solving the problem A*x = l*x */
     primme.n = 12 * nsites * NPROC; /* set problem dimension */
-    primme.numEvals = evadat.nev;   /* Number of wanted eigenpairs */
-    primme.eps = evadat.tol;        /* ||r|| <= eps * ||matrix|| */
+    primme.numEvals = evadat.nev; /* Number of wanted eigenpairs */
+    primme.eps = evadat.tol; /* ||r|| <= eps * ||matrix|| */
     primme.target = evadat.target;
 
     primme.numTargetShifts = 1;
@@ -574,10 +484,7 @@ int main(int argc, char *argv[])
     primme_set_method(PRIMME_DEFAULT_MIN_MATVECS, &primme);
 
     /* Display PRIMME configuration struct (optional) */
-    if (my_rank == 0 && !append)
-    {
-        primme_display_params(primme);
-    }
+    if (my_rank == 0 && !append) { primme_display_params(primme); }
 
     /* Allocate space for converged Ritz values and residual norms */
     evals = (double *)malloc(primme.numEvals * sizeof(double));
@@ -592,8 +499,7 @@ int main(int argc, char *argv[])
     iend = 0;
     wtavg = 0.0;
 
-    for (nc = first; (iend == 0) && (nc <= last); nc += step)
-    {
+    for (nc = first; (iend == 0) && (nc <= last); nc += step) {
         primme.initSize = 0;
 
         message("Configuration no %d\n", nc);
@@ -604,25 +510,20 @@ int main(int argc, char *argv[])
         lat_parms();
         m0 = lat_parms().m0[0];
 
-        while (m0 >= lat_parms().m0[0] && m0 <= lat_parms().m0[1])
-        {
+        while (m0 >= lat_parms().m0[0] && m0 <= lat_parms().m0[1]) {
             set_sw_parms(m0);
 
             is = query_flags(UD_PHASE_SET);
-            if (is == 0)
-                set_ud_phase();
+            if (is == 0) { set_ud_phase(); }
 
             dfl_modes2(ifail, status);
 
-            if ((ifail[0] < -2) || (ifail[1] < 0))
-            {
+            if ((ifail[0] < -2) || (ifail[1] < 0)) {
                 print_status("dfl_modes2", ifail, status);
-                error_root(1, 1, "smd_reset_dfl [smd.c]",
-                           "Deflation subspace generation failed");
+                error_root(1, 1, "smd_reset_dfl [smd.c]", "Deflation subspace generation failed");
             }
 
-            if (is == 0)
-                unset_ud_phase();
+            if (is == 0) { unset_ud_phase(); }
 
             sw_term(NO_PTS);
 
@@ -640,9 +541,7 @@ int main(int argc, char *argv[])
 
             error(ret != 0, 1, "eva_primme.c", "Error: primme returned with nonzero exit status: %d \n", ret);
 
-
-            for (i = 0; i < primme.initSize; i++)
-            {
+            for (i = 0; i < primme.initSize; i++) {
                 memcpy((void *)wscheck[0], (void *)(evecs + i * primme.nLocal), sizeof(PRIMME_COMPLEX_DOUBLE) * primme.nLocal);
 
                 Dw_dble(0.0, wscheck[0], wscheck[1]);
@@ -667,8 +566,7 @@ int main(int argc, char *argv[])
             message("GlobalSum Time         : %g\n", primme.stats.timeGlobalSum);
             message("Broadcast Time         : %g\n", primme.stats.timeBroadcast);
             message("Total Time             : %g\n", primme.stats.elapsedTime);
-            if (primme.stats.lockingIssue)
-            {
+            if (primme.stats.lockingIssue) {
                 message("\nA locking problem has occurred.\n");
                 message("Some eigenpairs do not have a residual norm less than the tolerance.\n");
                 message("However, the subspace of evecs is accurate to the required tolerance.\n");
@@ -676,12 +574,10 @@ int main(int argc, char *argv[])
             message("Configuration no %d m0=%lf fully processed in %.2e sec ", nc, m0, wt2 - wt1);
             message("(average = %.2e sec)\n\n", wtavg / (double)((nc) / step + 1));
 
-            if (m0 != lat_parms().m0[0])
-            {
+            if (m0 != lat_parms().m0[0]) {
                 message("Projection matrix of Eigenvects\n");
 
-                for (i = 0; i < primme.initSize; i++)
-                {
+                for (i = 0; i < primme.initSize; i++) {
                     memcpy((void *)wscheck[0], (void *)(evecs + i * primme.nLocal),
                            sizeof(PRIMME_COMPLEX_DOUBLE) * primme.nLocal);
                     mulg5_dble(nsites, 0, wscheck[0]);
@@ -689,8 +585,7 @@ int main(int argc, char *argv[])
                     w1 = sqrt(qr.q[0]);
 
                     message("|");
-                    for (j = 0; j < primme.initSize; j++)
-                    {
+                    for (j = 0; j < primme.initSize; j++) {
                         qr = spinor_prod_re_dble(nsites, 1, wscheck[0], wscheck[j + 2]);
                         message(" %.2e ", (qr.q[0] / w1) / w2[j]);
                     }
@@ -698,8 +593,7 @@ int main(int argc, char *argv[])
                 }
             }
 
-            for (i = 0; i < primme.initSize; i++)
-            {
+            for (i = 0; i < primme.initSize; i++) {
                 memcpy((void *)wscheck[2 + i], (void *)(evecs + i * primme.nLocal),
                        sizeof(PRIMME_COMPLEX_DOUBLE) * primme.nLocal);
                 mulg5_dble(nsites, 0, wscheck[i + 2]);
@@ -707,8 +601,7 @@ int main(int argc, char *argv[])
                 w2[i] = sqrt(qr.q[0]);
             }
 
-            switch (primme.dynamicMethodSwitch)
-            {
+            switch (primme.dynamicMethodSwitch) {
             case -1:
                 message("Recommended method for next run: DEFAULT_MIN_MATVECS\n");
                 break;
@@ -722,28 +615,23 @@ int main(int argc, char *argv[])
 
             /*determine the new m0 or stop:*/
 
-            if (m0 == lat_parms().m0[1])
-            {
+            if (m0 == lat_parms().m0[1]) {
                 message("End of iteration for configuration no %d\n", nc);
 
                 break;
             }
 
-            double mineval = ABS(evals[0]);
-            for (i = 1; i < primme.initSize; i++)
-            {
-                if (mineval > ABS(evals[i]))
-                {
-                    mineval = ABS(evals[i]);
-                }
+            double  mineval = ABS(evals[0]);
+            for (i = 1; i < primme.initSize; i++) {
+                if (mineval > ABS(evals[i])) { mineval = ABS(evals[i]); }
             }
 
-            if (m0 + mineval > lat_parms().m0[1])
-            {
+            if (m0 == lat_parms().m0[0]) { starteval = mineval; }
+            mineval = (starteval / 100 > mineval) ? starteval / 100 : mineval;
+
+            if (m0 + mineval > lat_parms().m0[1]) {
                 m0 = lat_parms().m0[1];
-            }
-            else
-            {
+            } else {
                 m0 = m0 + mineval;
             }
             message("Configuration no %d next step will evaluate m=%lf\n", nc, m0);
@@ -752,8 +640,7 @@ int main(int argc, char *argv[])
 
         check_endflag(&iend);
 
-        if (my_rank == 0)
-        {
+        if (my_rank == 0) {
             fflush(flog);
             copy_file(log_file, log_save);
             fclose(flog);
@@ -764,8 +651,7 @@ int main(int argc, char *argv[])
     exit(0);
 }
 
-void MatMult_Dw_primme(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize, primme_params *primme, int *ierr)
-{
+void MatMult_Dw_primme(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize, primme_params *primme, int *ierr) {
     spinor_dble **wsd3;
 
     sw_term(NO_PTS);
@@ -782,37 +668,28 @@ void MatMult_Dw_primme(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *
     release_wsd();
 }
 
-static void par_GlobalSum(void *sendBuf, void *recvBuf, int *count, primme_params *primme, int *ierr)
-{
+static void par_GlobalSum(void *sendBuf, void *recvBuf, int *count, primme_params *primme, int *ierr) {
     MPI_Comm communicator = *(MPI_Comm *)primme->commInfo;
 
-    if (sendBuf == recvBuf)
-    {
+    if (sendBuf == recvBuf) {
         *ierr = MPI_Allreduce(MPI_IN_PLACE, recvBuf, *count, MPI_DOUBLE, MPI_SUM, communicator) != MPI_SUCCESS;
-    }
-    else
-    {
+    } else {
         *ierr = MPI_Allreduce(sendBuf, recvBuf, *count, MPI_DOUBLE, MPI_SUM, communicator) != MPI_SUCCESS;
     }
 }
 
-static void broadcastForDouble(void *buffer, int *count, primme_params *primme, int *ierr)
-{
+static void broadcastForDouble(void *buffer, int *count, primme_params *primme, int *ierr) {
     MPI_Comm communicator = *(MPI_Comm *)primme->commInfo;
 
-    if (MPI_Bcast(buffer, *count, MPI_DOUBLE, 0 /* root */, communicator) == MPI_SUCCESS)
-    {
+    if (MPI_Bcast(buffer, *count, MPI_DOUBLE, 0 /* root */, communicator) == MPI_SUCCESS) {
         *ierr = 0;
-    }
-    else
-    {
+    } else {
         *ierr = 1;
     }
 }
 
-void MatMult_Dw_primme_Preconditioner(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize,
-                                      primme_params *primme, int *ierr)
-{
+void MatMult_Dw_primme_Preconditioner(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize, primme_params *primme,
+                                      int *ierr) {
     spinor_dble **wsd3;
     int status;
     int ifail;
