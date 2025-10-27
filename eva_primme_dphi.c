@@ -1,6 +1,6 @@
 /*******************************************************************************
  *
- * File eva_primme.c
+ * File eva_primme_dphi.c
  *
  * This software is distributed under the terms of the GNU General Public
  * License (GPL)
@@ -97,11 +97,11 @@ static void read_dirs(void) {
 }
 
 static void setup_files(void) {
-    error(name_size("%s/%s.eva_primme.log~", log_dir, nbase) >= NAME_SIZE, 1, "setup_files [eva_primme.c]",
+    error(name_size("%s/%s.eva_primme_dphi.log~", log_dir, nbase) >= NAME_SIZE, 1, "setup_files [eva_primme_dphi.c]",
           "log_dir name is too long");
 
-    sprintf(log_file, "%s/%s.eva_primme.log", log_dir, nbase);
-    sprintf(end_file, "%s/%s.eva_primme.end", log_dir, nbase);
+    sprintf(log_file, "%s/%s.eva_primme_dphi.log", log_dir, nbase);
+    sprintf(end_file, "%s/%s.eva_primme_dphi.end", log_dir, nbase);
     sprintf(log_save, "%s~", log_file);
 
     check_dir_root(log_dir);
@@ -116,7 +116,7 @@ static void read_cnfg_range(void) {
         read_line("step", "%d", &step);
 
         error_root((first < 1) || (last < first) || (step < 1) || ((last - first) % step != 0), 1,
-                   "read_cnfg_range [eva_primme.c]", "Improper configuration range");
+                   "read_cnfg_range [eva_primme_dphi.c]", "Improper configuration range");
     }
 
     MPI_Bcast(&first, 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -134,7 +134,7 @@ static void read_primme_parms(void) {
         read_line("nev", "%d", &nev);
         read_line("tolerance", "%lf", &tol);
 
-        error_root((nev < 1) || (tol < 0.0), 1, "read_primme_parms [eva_primme.c]", "Parameters are out of range");
+        error_root((nev < 1) || (tol < 0.0), 1, "read_primme_parms [eva_primme_dphi.c]", "Parameters are out of range");
 
         read_line("operator", "%s", name);
         read_line("target", "%s", targname);
@@ -144,7 +144,7 @@ static void read_primme_parms(void) {
         } else if (strcmp(name, "Dw") == 0) {
             opid = EVA_DW;
         } else {
-            error_root(1, 1, "read_primme_parms [eva_primme.c]", "Unknown matrix type");
+            error_root(1, 1, "read_primme_parms [eva_primme_dphi.c]", "Unknown matrix type");
         }
 
         if (strcmp(targname, "small") == 0) {
@@ -152,7 +152,7 @@ static void read_primme_parms(void) {
         } else if (strcmp(targname, "large") == 0) {
             targ = primme_largest_abs;
         } else {
-            error_root(1, 1, "read_primme_parms [eva_primme.c]", "Unknown eigenvalue search target");
+            error_root(1, 1, "read_primme_parms [eva_primme_dphi.c]", "Unknown eigenvalue search target");
         }
     }
 
@@ -178,13 +178,13 @@ static void read_infile(int argc, char *argv[]) {
         ifile = find_opt(argc, argv, "-i");
         endian = endianness();
 
-        error_root((ifile == 0) || (ifile == (argc - 1)), 1, "read_infile [eva_primme.c]",
+        error_root((ifile == 0) || (ifile == (argc - 1)), 1, "read_infile [eva_primme_dphi.c]",
                    "Syntax: eva_primme -i <input file>");
 
-        error_root(endian == UNKNOWN_ENDIAN, 1, "read_infile [eva_primme.c]", "Machine has unknown endianness");
+        error_root(endian == UNKNOWN_ENDIAN, 1, "read_infile [eva_primme_dphi.c]", "Machine has unknown endianness");
 
         fin = freopen(argv[ifile + 1], "r", stdin);
-        error_root(fin == NULL, 1, "read_infile [eva_primme.c]", "Unable to open input file");
+        error_root(fin == NULL, 1, "read_infile [eva_primme_dphi.c]", "Unable to open input file");
 
         append = find_opt(argc, argv, "-a");
     }
@@ -216,7 +216,7 @@ static void check_old_log(int *fst, int *lst, int *stp) {
     char line[NAME_SIZE];
 
     fend = fopen(log_file, "r");
-    error_root(fend == NULL, 1, "check_old_log [eva_primme.c]", "Unable to open log file");
+    error_root(fend == NULL, 1, "check_old_log [eva_primme_dphi.c]", "Unable to open log file");
 
     fc = 0;
     lc = 0;
@@ -266,9 +266,9 @@ static void check_old_log(int *fst, int *lst, int *stp) {
 
     fclose(fend);
 
-    error_root((ie & 0x1) != 0x0, 1, "check_old_log [eva_primme.c]", "Incorrect read count");
-    error_root((ie & 0x2) != 0x0, 1, "check_old_log [eva_primme.c]", "Configuration numbers are not equally spaced");
-    error_root(isv == 0, 1, "check_old_log [eva_primme.c]", "Log file extends beyond the last configuration save");
+    error_root((ie & 0x1) != 0x0, 1, "check_old_log [eva_primme_dphi.c]", "Incorrect read count");
+    error_root((ie & 0x2) != 0x0, 1, "check_old_log [eva_primme_dphi.c]", "Configuration numbers are not equally spaced");
+    error_root(isv == 0, 1, "check_old_log [eva_primme_dphi.c]", "Log file extends beyond the last configuration save");
 
     (*fst) = fc;
     (*lst) = lc;
@@ -287,20 +287,21 @@ static void check_files(void) {
         if (append) {
             check_old_log(&fst, &lst, &stp);
 
-            error_root((fst != lst) && (stp != step), 1, "check_files [eva_primme.c]",
+            error_root((fst != lst) && (stp != step), 1, "check_files [eva_primme_dphi.c]",
                        "Continuation run:\n"
                        "Previous run had a different configuration separation");
-            error_root(first != lst + step, 1, "check_files [eva_primme.c]",
+            error_root(first != lst + step, 1, "check_files [eva_primme_dphi.c]",
                        "Continuation run:\n"
                        "Configuration range does not continue the previous one");
         } else {
             ie = check_file(log_file, "r");
 
-            error_root(ie != 0, 1, "check_files [eva_primme.c]", "Attempt to overwrite old *.log  file");
+            error_root(ie != 0, 1, "check_files [eva_primme_dphi.c]", "Attempt to overwrite old *.log  file");
         }
     }
 
-    error(name_size("%sn%d", nbase, last) >= NAME_SIZE, 1, "check_files [eva_primme.c]", "Configuration base name is too long");
+    error(name_size("%sn%d", nbase, last) >= NAME_SIZE, 1, "check_files [eva_primme_dphi.c]",
+          "Configuration base name is too long");
     sprintf(cnfg_file, "%sn%d", nbase, last);
     check_iodat(iodat, "i", 0x1, cnfg_file);
 }
@@ -319,7 +320,7 @@ static void print_info(void) {
         } else {
             flog = freopen(log_file, "w", stdout);
         }
-        error_root(flog == NULL, 1, "print_info [eva_primme.c]", "Unable to open log file");
+        error_root(flog == NULL, 1, "print_info [eva_primme_dphi.c]", "Unable to open log file");
         if (append) {
             printf("Continuation run\n\n");
         } else {
@@ -400,7 +401,7 @@ int main(int argc, char *argv[]) {
     complex_qflt dlambda;
     qflt rqsm;
 
-    double del, w1, *w2,starteval;
+    double del, w1, *w2, starteval;
 
     double m0; /*bare mass*/
     /* PRIMME configuration struct */
@@ -431,9 +432,11 @@ int main(int argc, char *argv[]) {
     alloc_wvd(nwvd);
     status = alloc_std_status();
     w2 = malloc(evadat.nev * sizeof(double));
+    error(w2 == NULL, 1, "eva_primme_dphi.c", "Error: Unable to allocate the primme w2 (normalization weights) \n");
 
 #if (defined _OPENMP)
-    error(omp_get_num_threads() != 1, 1, "eva_primme.c", "At the present stage eva_primme works only with OMP_NUM_THREADS=1");
+    error(omp_get_num_threads() != 1, 1, "eva_primme_dphi.c",
+          "At the present stage eva_primme works only with OMP_NUM_THREADS=1");
 #endif
     /*Set default values in PRIMME configuration struct */
 
@@ -459,6 +462,7 @@ int main(int argc, char *argv[]) {
 
     primme.numTargetShifts = 1;
     primme.targetShifts = (double *)malloc(primme.numTargetShifts * sizeof(double));
+    error(primme.targetShifts == NULL, 1, "eva_primme_dphi.c", "Error: Unable to allocate the primme.targetShifts \n");
     primme.targetShifts[0] = 0.0;
     primme.initSize = 0;
     /* primme.initSize may be not zero after a d/zprimme;
@@ -488,10 +492,13 @@ int main(int argc, char *argv[]) {
 
     /* Allocate space for converged Ritz values and residual norms */
     evals = (double *)malloc(primme.numEvals * sizeof(double));
-    evecs = (PRIMME_COMPLEX_DOUBLE *)malloc(primme.n * primme.numEvals * sizeof(PRIMME_COMPLEX_DOUBLE));
-    error(evecs == NULL, 1, "eva_primme.c", "Error: Unable to allocate the primme eigenvectors \n");
+    error(evals == NULL, 1, "eva_primme_dphi.c", "Error: Unable to allocate the primme eigenvalues \n");
+
+    evecs = (PRIMME_COMPLEX_DOUBLE *)malloc(primme.nLocal * primme.numEvals * sizeof(PRIMME_COMPLEX_DOUBLE));
+    error(evecs == NULL, 1, "eva_primme_dphi.c", "Error: Unable to allocate the primme eigenvectors \n");
 
     rnorms = (double *)malloc(primme.numEvals * sizeof(double));
+    error(rnorms == NULL, 1, "eva_primme_dphi.c", "Error: Unable to allocate the primme rnorms \n");
 
     wscheck = reserve_wsd(2 + primme.numEvals);
     message("Reserving % d Ev\n", 2 + primme.numEvals);
@@ -510,8 +517,11 @@ int main(int argc, char *argv[]) {
         lat_parms();
         m0 = lat_parms().m0[0];
 
+        message("Evaluating mass %lf %lf\n", m0, lat_parms().m0[1]);
+
         while (m0 >= lat_parms().m0[0] && m0 <= lat_parms().m0[1]) {
             set_sw_parms(m0);
+            message("Evaluating mass %lf\n", m0);
 
             is = query_flags(UD_PHASE_SET);
             if (is == 0) { set_ud_phase(); }
@@ -539,7 +549,7 @@ int main(int argc, char *argv[]) {
             ret = zprimme(evals, evecs, rnorms, &primme);
             wt2 = MPI_Wtime();
 
-            error(ret != 0, 1, "eva_primme.c", "Error: primme returned with nonzero exit status: %d \n", ret);
+            error(ret != 0, 1, "eva_primme_dphi.c", "Error: primme returned with nonzero exit status: %d \n", ret);
 
             for (i = 0; i < primme.initSize; i++) {
                 memcpy((void *)wscheck[0], (void *)(evecs + i * primme.nLocal), sizeof(PRIMME_COMPLEX_DOUBLE) * primme.nLocal);
@@ -621,7 +631,7 @@ int main(int argc, char *argv[]) {
                 break;
             }
 
-            double  mineval = ABS(evals[0]);
+            double mineval = ABS(evals[0]);
             for (i = 1; i < primme.initSize; i++) {
                 if (mineval > ABS(evals[i])) { mineval = ABS(evals[i]); }
             }
@@ -658,6 +668,8 @@ void MatMult_Dw_primme(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *
 
     wsd3 = reserve_wsd(2);
 
+    error(*blockSize != 1, 1, "MatMult_Dw_primme", "Blocksize must be 1 instead found (%d)\n", *blockSize);
+
     memcpy((void *)wsd3[0], (void *)x, sizeof(PRIMME_COMPLEX_DOUBLE) * *ldx);
 
     Dw_dble(0.0, wsd3[0], wsd3[1]);
@@ -691,24 +703,26 @@ static void broadcastForDouble(void *buffer, int *count, primme_params *primme, 
 void MatMult_Dw_primme_Preconditioner(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize, primme_params *primme,
                                       int *ierr) {
     spinor_dble **wsd3;
-    int status;
-    int ifail;
+    static int *status = NULL;
+    int ifail[2];
     sap_parms_t sap;
 
     lat_parms_t lat = lat_parms();
     dfl_pro_parms_t dfp = dfl_pro_parms();
     dfl_gen_parms_t dfg = dfl_gen_parms();
 
+    if (status == NULL) { status = alloc_std_status(); }
+
     sap = sap_parms();
     set_sap_parms(sap.bs, 1, 4, 5);
-    wsd3 = reserve_wsd(1);
+    wsd3 = reserve_wsd(2);
 
     memcpy((void *)wsd3[0], (void *)x, sizeof(PRIMME_COMPLEX_DOUBLE) * *ldx);
     mulg5_dble(VOLUME, 2, wsd3[0]);
 
-    dfl_sap_gcr2(dfp.nkv, dfp.nmx, lat.isw, dfp.res, dfg.mu, wsd3[0], wsd3[0], &ifail, &status);
+    dfl_sap_gcr2(dfp.nkv, dfp.nmx, lat.isw, dfp.res, dfg.mu, wsd3[0], wsd3[1], ifail, status);
 
-    memcpy((void *)y, (void *)wsd3[0], sizeof(PRIMME_COMPLEX_DOUBLE) * *ldx);
+    memcpy((void *)y, (void *)wsd3[1], sizeof(PRIMME_COMPLEX_DOUBLE) * *ldx);
 
     release_wsd();
 }
