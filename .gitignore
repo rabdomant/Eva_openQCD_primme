@@ -1,1 +1,4 @@
+**/.DS_Store
+**/*.o
+**/*.d
 log_dat/*
