@@ -401,7 +401,7 @@ int main(int argc, char *argv[]) {
     complex_qflt dlambda;
     qflt rqsm;
 
-    double del, w1, *w2, starteval;
+    double del, w1, *w2, starteval, maxm0;
 
     double m0; /*bare mass*/
     /* PRIMME configuration struct */
@@ -636,11 +636,16 @@ int main(int argc, char *argv[]) {
                 if (mineval > ABS(evals[i])) { mineval = ABS(evals[i]); }
             }
 
-            if (m0 == lat_parms().m0[0]) { starteval = mineval; }
-            mineval = (starteval / 100 > mineval) ? starteval / 100 : mineval;
+            if (m0 == lat_parms().m0[0]) {
+                starteval = mineval / 10;
+                maxm0 = (lat_parms().m0[0] + 10 * ABS(evals[1]) < lat_parms().m0[1]) ? lat_parms().m0[0] + 10 * ABS(evals[1]) :
+                                                                                       lat_parms().m0[1];
+            }
 
-            if (m0 + mineval > lat_parms().m0[1]) {
-                m0 = lat_parms().m0[1];
+            mineval = (starteval > mineval) ? starteval : mineval;
+
+            if (m0 + mineval > maxm0) {
+                m0 = maxm0;
             } else {
                 m0 = m0 + mineval;
             }
