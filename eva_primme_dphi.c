@@ -516,10 +516,11 @@ int main(int argc, char *argv[]) {
         set_ud_phase();
         lat_parms();
         m0 = lat_parms().m0[0];
+        maxm0 = lat_parms().m0[1];
 
-        message("Evaluating mass %lf %lf\n", m0, lat_parms().m0[1]);
+        message("Evaluating mass range from %lf to %lf (with the max condition enabled)\n", m0, lat_parms().m0[1]);
 
-        while (m0 >= lat_parms().m0[0] && m0 <= lat_parms().m0[1]) {
+        while (m0 >= lat_parms().m0[0] && m0 <= maxm0) {
             set_sw_parms(m0);
             message("Evaluating mass %lf\n", m0);
 
@@ -640,6 +641,7 @@ int main(int argc, char *argv[]) {
                 starteval = mineval / 10;
                 maxm0 = (lat_parms().m0[0] + 10 * ABS(evals[1]) < lat_parms().m0[1]) ? lat_parms().m0[0] + 10 * ABS(evals[1]) :
                                                                                        lat_parms().m0[1];
+                MPI_Bcast(&maxm0, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
             }
 
             mineval = (starteval > mineval) ? starteval : mineval;
@@ -650,6 +652,7 @@ int main(int argc, char *argv[]) {
                 m0 = m0 + mineval;
             }
             message("Configuration no %d next step will evaluate m=%lf\n", nc, m0);
+            MPI_Bcast(&m0, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
         }
         release_wsd();
 
