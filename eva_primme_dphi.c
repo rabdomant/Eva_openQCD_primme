@@ -395,10 +395,8 @@ int main(int argc, char *argv[]) {
     int nws, nwv, nwvd;
     qflt qr;
     int nsites;
-    int lastrun
-
-        double wt1,
-        wt2, wtavg;
+    int lastrun;
+    double wt1, wt2, wtavg;
     spinor_dble **wscheck;
     complex_qflt dlambda;
     qflt rqsm;
@@ -640,11 +638,12 @@ int main(int argc, char *argv[]) {
             }
 
             if (m0 == lat_parms().m0[0]) {
-                starteval = mineval / 10;
+                starteval = mineval / 20;
                 if (lat_parms().m0[0] + 20 * ABS(evals[1]) < lat_parms().m0[1]) {
                     maxm0 = lat_parms().m0[0] + 20 * ABS(evals[1]);
                     MPI_Bcast(&maxm0, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-                    message("Updated the mass range to [%lf : %lf] (ude to the max condition m_end -m_start <= 20*min_ev)\n", m0, maxm0);
+                    message("Updated the mass range to [%lf : %lf] (ude to the max condition m_end -m_start <= 20*min_ev)\n",
+                            m0, maxm0);
                 }
             }
 
