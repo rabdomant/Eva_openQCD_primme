@@ -395,8 +395,10 @@ int main(int argc, char *argv[]) {
     int nws, nwv, nwvd;
     qflt qr;
     int nsites;
+    int lastrun
 
-    double wt1, wt2, wtavg;
+        double wt1,
+        wt2, wtavg;
     spinor_dble **wscheck;
     complex_qflt dlambda;
     qflt rqsm;
@@ -519,8 +521,8 @@ int main(int argc, char *argv[]) {
         maxm0 = lat_parms().m0[1];
 
         message("Evaluating mass range from %lf to %lf (with the max condition enabled)\n", m0, lat_parms().m0[1]);
-
-        while (m0 >= lat_parms().m0[0] && m0 <= maxm0) {
+        lastrun = 0;
+        while (lastrun < 2) {
             set_sw_parms(m0);
             message("Evaluating mass %lf\n", m0);
 
@@ -639,15 +641,18 @@ int main(int argc, char *argv[]) {
 
             if (m0 == lat_parms().m0[0]) {
                 starteval = mineval / 10;
-                maxm0 = (lat_parms().m0[0] + 10 * ABS(evals[1]) < lat_parms().m0[1]) ? lat_parms().m0[0] + 10 * ABS(evals[1]) :
-                                                                                       lat_parms().m0[1];
-                MPI_Bcast(&maxm0, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+                if (lat_parms().m0[0] + 20 * ABS(evals[1]) < lat_parms().m0[1]) {
+                    maxm0 = lat_parms().m0[0] + 20 * ABS(evals[1]);
+                    MPI_Bcast(&maxm0, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+                    message("Updated the mass range to [%lf : %lf] (ude to the max condition m_end -m_start <= 20*min_ev)\n", m0, maxm0);
+                }
             }
 
             mineval = (starteval > mineval) ? starteval : mineval;
 
             if (m0 + mineval > maxm0) {
                 m0 = maxm0;
+                lastrun++;
             } else {
                 m0 = m0 + mineval;
             }
