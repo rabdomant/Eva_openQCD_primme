@@ -626,7 +626,7 @@ int main(int argc, char *argv[]) {
 
             /*determine the new m0 or stop:*/
 
-            if (m0 == lat_parms().m0[1]) {
+            if (lastrun ==1) {
                 message("End of iteration for configuration no %d\n", nc);
 
                 break;
