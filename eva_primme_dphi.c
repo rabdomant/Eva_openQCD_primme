@@ -626,11 +626,14 @@ int main(int argc, char *argv[]) {
 
             /*determine the new m0 or stop:*/
 
-            if (lastrun ==1) {
+            if (lastrun == 1) {
                 message("End of iteration for configuration no %d\n", nc);
 
                 break;
             }
+            static double lasteval = evals[0];
+            double ratio = evals[0] / lasteval;
+            lasteval = evals[0];
 
             double mineval = ABS(evals[0]);
             for (i = 1; i < primme.initSize; i++) {
@@ -653,7 +656,7 @@ int main(int argc, char *argv[]) {
                 m0 = maxm0;
                 lastrun++;
             } else {
-                m0 = m0 + mineval;
+                m0 = (ratio > 0.) ? m0 + mineval : m0 + 2 * mineval;
             }
             message("Configuration no %d next step will evaluate m=%lf\n", nc, m0);
             MPI_Bcast(&m0, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
