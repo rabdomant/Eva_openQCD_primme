@@ -510,7 +510,7 @@ int main(int argc, char *argv[]) {
         primme.initSize = 0;
 
         message("Configuration no %d\n", nc);
-
+	
         sprintf(cnfg_file, "%sn%d", nbase, nc);
         read_flds(iodat, cnfg_file, 0x0, 0x1);
         set_ud_phase();
@@ -520,6 +520,8 @@ int main(int argc, char *argv[]) {
 
         message("Evaluating mass range from %lf to %lf (with the max condition enabled)\n", m0, lat_parms().m0[1]);
         lastrun = 0;
+	double lasteval = -1.;
+	
         while (lastrun < 2) {
             set_sw_parms(m0);
             message("Evaluating mass %lf\n", m0);
@@ -631,7 +633,10 @@ int main(int argc, char *argv[]) {
 
                 break;
             }
-            static double lasteval = evals[0];
+
+	    if (lasteval == -1.)
+	      lasteval = evals[0];
+		    
             double ratio = evals[0] / lasteval;
             lasteval = evals[0];
 
